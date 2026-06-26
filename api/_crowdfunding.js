@@ -80,18 +80,58 @@ async function requestOpenAI(prompt, apiKey) {
     },
     body: JSON.stringify({
       model: OPENAI_MODEL,
-      tools: [{ type: "web_search" }],
+      tools: [{
+        type: "web_search",
+        search_context_size: "low",
+        filters: {
+          allowed_domains: ["wadiz.kr", "tumblbug.com", "ohmycompany.com", "funding4u.co.kr"]
+        }
+      }],
       tool_choice: "required",
       input: [
         {
           role: "system",
-          content: "You are a careful startup education research assistant. Use web search. Return only a complete JSON array."
+          content: "You are a careful startup education research assistant. Use web search results only. Never invent project names or URLs."
         },
         {
           role: "user",
           content: prompt
         }
       ],
+      text: {
+        format: {
+          type: "json_schema",
+          name: "crowdfunding_recommendations",
+          strict: true,
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            required: ["items"],
+            properties: {
+              items: {
+                type: "array",
+                minItems: 5,
+                maxItems: 5,
+                items: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["name", "platform", "category", "description", "url", "imageUrl", "searchKeyword", "reason"],
+                  properties: {
+                    name: { type: "string" },
+                    platform: { type: "string" },
+                    category: { type: "string" },
+                    description: { type: "string" },
+                    url: { type: "string" },
+                    imageUrl: { type: "string" },
+                    searchKeyword: { type: "string" },
+                    reason: { type: "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       temperature: 0.1,
       max_output_tokens: 4096
     })
@@ -139,11 +179,12 @@ function parseItems(text) {
     .replace(/```$/i, "")
     .trim();
 
-  const jsonText = extractFirstJsonArray(cleaned);
+  const jsonText = extractFirstJsonValue(cleaned);
   const parsed = JSON.parse(jsonText);
-  if (!Array.isArray(parsed)) return [];
+  const list = Array.isArray(parsed) ? parsed : parsed.items;
+  if (!Array.isArray(list)) return [];
 
-  return parsed.map((item) => ({
+  return list.map((item) => ({
     name: String(item.name || "").trim(),
     platform: String(item.platform || "").trim(),
     category: String(item.category || "").trim(),
@@ -155,9 +196,15 @@ function parseItems(text) {
   })).filter((item) => item.name && item.url);
 }
 
-function extractFirstJsonArray(text) {
-  const start = text.indexOf("[");
-  if (start === -1) throw new Error("JSON 배열을 찾지 못했습니다.");
+function extractFirstJsonValue(text) {
+  const arrayStart = text.indexOf("[");
+  const objectStart = text.indexOf("{");
+  const starts = [arrayStart, objectStart].filter((index) => index >= 0);
+  if (!starts.length) throw new Error("JSON 값을 찾지 못했습니다.");
+
+  const start = Math.min(...starts);
+  const openChar = text[start];
+  const closeChar = openChar === "[" ? "]" : "}";
 
   let depth = 0;
   let inString = false;
@@ -172,14 +219,14 @@ function extractFirstJsonArray(text) {
       continue;
     }
     if (char === "\"") inString = true;
-    else if (char === "[") depth += 1;
-    else if (char === "]") {
+    else if (char === openChar) depth += 1;
+    else if (char === closeChar) {
       depth -= 1;
       if (depth === 0) return text.slice(start, i + 1);
     }
   }
 
-  throw new Error("JSON 배열이 끝까지 완성되지 않았습니다.");
+  throw new Error("JSON 값이 끝까지 완성되지 않았습니다.");
 }
 
 async function validateAndEnrichProject(item) {
