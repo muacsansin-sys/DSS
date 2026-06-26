@@ -29,7 +29,12 @@ async function recommendCrowdfundingItems(interest, apiKey) {
     throw new Error("국내 크라우드펀딩 상세 페이지 후보를 찾지 못했습니다. 관심사를 더 구체적으로 입력해 다시 검색해 주세요.");
   }
 
-  return Promise.all(items.slice(0, 5).map(enrichProjectImage));
+  const enriched = await Promise.all(items.map(validateAndEnrichProject));
+  const validItems = enriched.filter(Boolean);
+  if (!validItems.length) {
+    throw new Error("실제로 열리는 국내 크라우드펀딩 상세 페이지를 확인하지 못했습니다. 관심사를 더 구체적으로 입력해 다시 검색해 주세요.");
+  }
+  return validItems.slice(0, 5);
 }
 
 function buildRecommendationPrompt(interest) {
@@ -50,20 +55,19 @@ function buildRecommendationPrompt(interest) {
 - 반드시 완성된 JSON 배열만 반환합니다.
 - 마크다운 코드블록, 해설, 주석, 출처 목록은 쓰지 않습니다.
 - JSON 배열에는 정확히 5개 후보를 넣습니다.
+- URL은 실제로 접속 가능한 프로젝트 상세 페이지여야 합니다.
+- 절대 URL을 추측하거나 만들지 마세요.
+- 12345, 67890, example, sample, placeholder 같은 예시형 URL은 절대 쓰지 마세요.
 
-각 객체 형식:
-[
-  {
-    "name": "아이템명",
-    "platform": "플랫폼명",
-    "category": "분야",
-    "description": "핵심 기능과 고객 가치를 1문장으로 설명",
-    "url": "크라우드펀딩 개별 프로젝트 상세 페이지 URL",
-    "imageUrl": "대표 상품 이미지 URL. 확인이 어려우면 빈 문자열",
-    "searchKeyword": "학생이 다시 확인할 검색어",
-    "reason": "경쟁 제품 분석에 적합한 이유 1문장"
-  }
-]
+각 객체에는 다음 키를 포함합니다:
+- name: 아이템명
+- platform: 플랫폼명
+- category: 분야
+- description: 핵심 기능과 고객 가치를 1문장으로 설명
+- url: 실제 크라우드펀딩 개별 프로젝트 상세 페이지 URL
+- imageUrl: 대표 상품 이미지 URL. 확인이 어려우면 빈 문자열
+- searchKeyword: 학생이 다시 확인할 검색어
+- reason: 경쟁 제품 분석에 적합한 이유 1문장
 `.trim();
 }
 
@@ -178,8 +182,8 @@ function extractFirstJsonArray(text) {
   throw new Error("JSON 배열이 끝까지 완성되지 않았습니다.");
 }
 
-async function enrichProjectImage(item) {
-  if (item.imageUrl && isAllowedImageUrl(item.imageUrl)) return item;
+async function validateAndEnrichProject(item) {
+  if (looksLikePlaceholderUrl(item.url)) return null;
 
   try {
     const response = await fetch(item.url, {
@@ -187,13 +191,26 @@ async function enrichProjectImage(item) {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AI Data Startup Lab"
       }
     });
+    if (!response.ok) return null;
+
     const html = await response.text();
+    if (!html || html.length < 500) return null;
+
+    if (item.imageUrl && isAllowedImageUrl(item.imageUrl)) return item;
     const imageUrl = extractRepresentativeImage(html, item.url);
     if (imageUrl) return { ...item, imageUrl };
+    return item;
   } catch {
-    // Some project pages block server-side fetching. The app can still make a text card.
+    return null;
   }
-  return item;
+}
+
+function looksLikePlaceholderUrl(value) {
+  const url = String(value || "").toLowerCase();
+  if (!url) return true;
+  if (/example|sample|placeholder|test/.test(url)) return true;
+  if (/(12345|67890|112233|445566|778899)/.test(url)) return true;
+  return false;
 }
 
 function extractRepresentativeImage(html, baseUrl) {
