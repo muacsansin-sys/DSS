@@ -1,0 +1,4 @@
+assets
+*.zip
+*.log
+.agents

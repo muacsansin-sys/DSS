@@ -1,0 +1,12 @@
+{
+  "name": "ai-data-startup-lab",
+  "version": "0.2.0",
+  "private": true,
+  "type": "commonjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.js"
+  }
+}
