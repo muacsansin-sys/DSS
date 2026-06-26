@@ -41,7 +41,7 @@ function buildRecommendationPrompt(interest) {
   return `
 관심사: ${interest}
 
-학생 창업 실습에서 경쟁 제품으로 분석할 국내 크라우드펀딩 제품/프로젝트 후보 5개를 찾아 주세요.
+학생 창업 실습에서 경쟁 제품으로 분석할 국내 크라우드펀딩 제품/프로젝트 후보 10개를 찾아 주세요.
 
 검색 범위:
 - 반드시 국내 크라우드펀딩 플랫폼의 개별 제품/프로젝트 상세 페이지여야 합니다.
@@ -54,7 +54,7 @@ function buildRecommendationPrompt(interest) {
 - 설명은 짧게 작성합니다.
 - 반드시 완성된 JSON 배열만 반환합니다.
 - 마크다운 코드블록, 해설, 주석, 출처 목록은 쓰지 않습니다.
-- JSON 배열에는 정확히 5개 후보를 넣습니다.
+- JSON 배열에는 정확히 10개 후보를 넣습니다.
 - URL은 실제로 접속 가능한 프로젝트 상세 페이지여야 합니다.
 - 절대 URL을 추측하거나 만들지 마세요.
 - 12345, 67890, example, sample, placeholder 같은 예시형 URL은 절대 쓰지 마세요.
@@ -110,8 +110,8 @@ async function requestOpenAI(prompt, apiKey) {
             properties: {
               items: {
                 type: "array",
-                minItems: 5,
-                maxItems: 5,
+                minItems: 10,
+                maxItems: 10,
                 items: {
                   type: "object",
                   additionalProperties: false,
