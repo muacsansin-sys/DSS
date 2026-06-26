@@ -1,4 +1,4 @@
-const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
+const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4.1";
 
 const CROWDFUNDING_DOMAINS = [
   "wadiz.kr",
@@ -13,7 +13,17 @@ const CROWDFUNDING_DOMAINS = [
 
 async function recommendCrowdfundingItems(interest, apiKey) {
   const prompt = buildRecommendationPrompt(interest);
-  const items = await getParsedItemsWithRetry(prompt, apiKey);
+  const data = await requestOpenAI(prompt, apiKey);
+  const text = extractOutputText(data);
+
+  let items;
+  try {
+    items = parseItems(text).filter(isCrowdfundingProject);
+  } catch (error) {
+    throw new Error(
+      `추천 결과를 정리하는 중 문제가 생겼습니다. 관심사를 조금 더 구체적으로 입력해 다시 검색해 주세요. (${error.message})`
+    );
+  }
 
   if (!items.length) {
     throw new Error("국내 크라우드펀딩 상세 페이지 후보를 찾지 못했습니다. 관심사를 더 구체적으로 입력해 다시 검색해 주세요.");
@@ -25,28 +35,6 @@ async function recommendCrowdfundingItems(interest, apiKey) {
     throw new Error("실제로 열리는 국내 크라우드펀딩 상세 페이지를 확인하지 못했습니다. 관심사를 더 구체적으로 입력해 다시 검색해 주세요.");
   }
   return validItems.slice(0, 5);
-}
-
-async function getParsedItemsWithRetry(prompt, apiKey) {
-  const attempts = [
-    prompt,
-    `${prompt}\n\n중요: 이번 응답은 각 설명을 40자 이내로 줄이고, 완성된 JSON만 아주 짧게 반환하세요.`
-  ];
-
-  let lastError = null;
-  for (const attemptPrompt of attempts) {
-    const data = await requestOpenAI(attemptPrompt, apiKey);
-    const text = extractOutputText(data);
-    try {
-      return parseItems(text).filter(isCrowdfundingProject);
-    } catch (error) {
-      lastError = error;
-    }
-  }
-
-  throw new Error(
-    `추천 결과를 정리하는 중 문제가 생겼습니다. 관심사를 조금 더 구체적으로 입력해 다시 검색해 주세요. (${lastError?.message || "JSON 변환 실패"})`
-  );
 }
 
 function buildRecommendationPrompt(interest) {
@@ -94,7 +82,10 @@ async function requestOpenAI(prompt, apiKey) {
       model: OPENAI_MODEL,
       tools: [{
         type: "web_search",
-        search_context_size: "low"
+        search_context_size: "low",
+        filters: {
+          allowed_domains: ["wadiz.kr", "tumblbug.com", "ohmycompany.com", "funding4u.co.kr"]
+        }
       }],
       tool_choice: "required",
       input: [
@@ -142,7 +133,7 @@ async function requestOpenAI(prompt, apiKey) {
         }
       },
       temperature: 0.1,
-      max_output_tokens: 8192
+      max_output_tokens: 4096
     })
   });
 
