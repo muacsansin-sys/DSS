@@ -82,10 +82,7 @@ async function requestOpenAI(prompt, apiKey) {
       model: OPENAI_MODEL,
       tools: [{
         type: "web_search",
-        search_context_size: "low",
-        filters: {
-          allowed_domains: ["wadiz.kr", "tumblbug.com", "ohmycompany.com", "funding4u.co.kr"]
-        }
+        search_context_size: "low"
       }],
       tool_choice: "required",
       input: [
