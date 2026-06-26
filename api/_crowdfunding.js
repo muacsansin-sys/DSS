@@ -12,27 +12,62 @@ const CROWDFUNDING_DOMAINS = [
 ];
 
 async function recommendCrowdfundingItems(interest, apiKey) {
-  const prompt = `관심사: ${interest}
+  const prompt = buildRecommendationPrompt(interest);
+  const data = await requestOpenAI(prompt, apiKey);
+  const text = extractOutputText(data);
 
-학생 창업 실습용 경쟁제품 후보를 찾아라.
-와디즈, 텀블벅, 오마이컴퍼니, 펀딩포유 같은 한국 크라우드펀딩 플랫폼 안의 개별 프로젝트/제품 페이지만 추천한다.
-브랜드 공식몰, 자체 쇼핑몰, 네이버 스마트스토어, 쿠팡, 아마존, 언론 기사, 블로그, 유튜브, 앱스토어, 기업 홈페이지는 절대 추천하지 않는다.
-해외 플랫폼(킥스타터, 인디고고, 마쿠아케, CAMPFIRE 등)은 절대 추천하지 않는다.
-url은 반드시 크라우드펀딩 플랫폼의 프로젝트 상세페이지여야 한다.
-검색할 때는 site:wadiz.kr, site:tumblbug.com, site:ohmycompany.com, site:funding4u.co.kr 등을 우선 사용한다.
-가능하면 최근 사례를 우선하되, 프로젝트 상세페이지 URL을 확인할 수 있는 후보를 고른다.
+  let items;
+  try {
+    items = parseItems(text).filter(isCrowdfundingProject);
+  } catch (error) {
+    throw new Error(
+      `추천 결과를 정리하는 중 문제가 생겼습니다. 관심사를 조금 더 구체적으로 입력해 다시 검색해 주세요. (${error.message})`
+    );
+  }
 
-반드시 JSON 배열만 출력한다. 후보는 정확히 5개다.
-각 객체의 키:
-- name: 아이템명
-- platform: 플랫폼명
-- category: 분야
-- description: 핵심 기능과 고객 가치를 한국어 1-2문장으로 설명
-- url: 크라우드펀딩 플랫폼 내부의 실제 프로젝트 상세페이지 URL
-- imageUrl: 상세페이지의 대표 상품 이미지 URL. 확인이 어렵다면 빈 문자열
-- searchKeyword: 학생이 다시 찾을 검색 키워드
-- reason: 이 아이템이 경쟁제품 분석에 적합한 이유`;
+  if (!items.length) {
+    throw new Error("국내 크라우드펀딩 상세 페이지 후보를 찾지 못했습니다. 관심사를 더 구체적으로 입력해 다시 검색해 주세요.");
+  }
 
+  return Promise.all(items.slice(0, 5).map(enrichProjectImage));
+}
+
+function buildRecommendationPrompt(interest) {
+  return `
+관심사: ${interest}
+
+학생 창업 실습에서 경쟁 제품으로 분석할 국내 크라우드펀딩 제품/프로젝트 후보 5개를 찾아 주세요.
+
+검색 범위:
+- 반드시 국내 크라우드펀딩 플랫폼의 개별 제품/프로젝트 상세 페이지여야 합니다.
+- 허용 플랫폼: 와디즈(wadiz.kr), 텀블벅(tumblbug.com), 오마이컴퍼니(ohmycompany.com), 펀딩포유(funding4u.co.kr)
+- 브랜드 자사몰, 네이버 스마트스토어, 쿠팡, 아마존, 일반 기사, 블로그, 유튜브, 기업 홈페이지는 제외합니다.
+- 해외 플랫폼(Indiegogo, Kickstarter, Makuake, CAMPFIRE 등)은 제외합니다.
+- 가능하면 최근 또는 성공적으로 펀딩된 사례를 우선합니다.
+
+반환 규칙:
+- 설명은 짧게 작성합니다.
+- 반드시 완성된 JSON 배열만 반환합니다.
+- 마크다운 코드블록, 해설, 주석, 출처 목록은 쓰지 않습니다.
+- JSON 배열에는 정확히 5개 후보를 넣습니다.
+
+각 객체 형식:
+[
+  {
+    "name": "아이템명",
+    "platform": "플랫폼명",
+    "category": "분야",
+    "description": "핵심 기능과 고객 가치를 1문장으로 설명",
+    "url": "크라우드펀딩 개별 프로젝트 상세 페이지 URL",
+    "imageUrl": "대표 상품 이미지 URL. 확인이 어려우면 빈 문자열",
+    "searchKeyword": "학생이 다시 확인할 검색어",
+    "reason": "경쟁 제품 분석에 적합한 이유 1문장"
+  }
+]
+`.trim();
+}
+
+async function requestOpenAI(prompt, apiKey) {
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
@@ -46,28 +81,39 @@ url은 반드시 크라우드펀딩 플랫폼의 프로젝트 상세페이지여
       input: [
         {
           role: "system",
-          content: "You are a careful startup education research assistant. Use web search and return only valid JSON."
+          content: "You are a careful startup education research assistant. Use web search. Return only a complete JSON array."
         },
         {
           role: "user",
           content: prompt
         }
       ],
-      temperature: 0.2
+      temperature: 0.1,
+      max_output_tokens: 4096
     })
   });
 
-  const data = await response.json();
+  const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(data.error?.message || "OpenAI API request failed");
+    throw new Error(formatOpenAIError(data));
   }
+  return data;
+}
 
-  const text = extractOutputText(data);
-  const items = parseItems(text).filter(isCrowdfundingProject);
-  if (!items.length) {
-    throw new Error("한국 크라우드펀딩 플랫폼 내부 제품을 찾지 못했습니다. 관심사를 더 구체적으로 입력해 다시 검색해주세요.");
+function formatOpenAIError(data) {
+  const code = data.error?.code || data.error?.type || "";
+  const message = data.error?.message || "OpenAI API 요청에 실패했습니다.";
+
+  if (/quota|billing|credit|insufficient/i.test(`${code} ${message}`)) {
+    return "OpenAI API 결제/크레딧 한도 문제로 검색하지 못했습니다. Billing과 Usage limit을 확인해 주세요.";
   }
-  return Promise.all(items.slice(0, 5).map(enrichProjectImage));
+  if (/rate/i.test(`${code} ${message}`)) {
+    return "OpenAI API 요청이 잠시 많아 검색하지 못했습니다. 잠시 뒤 다시 시도해 주세요.";
+  }
+  if (/key|auth|permission/i.test(`${code} ${message}`)) {
+    return "OpenAI API 키 인증에 실패했습니다. Vercel 환경변수 OPENAI_API_KEY를 확인해 주세요.";
+  }
+  return message;
 }
 
 function extractOutputText(data) {
@@ -107,7 +153,7 @@ function parseItems(text) {
 
 function extractFirstJsonArray(text) {
   const start = text.indexOf("[");
-  if (start === -1) throw new Error("추천 결과에 JSON 배열이 없습니다.");
+  if (start === -1) throw new Error("JSON 배열을 찾지 못했습니다.");
 
   let depth = 0;
   let inString = false;
@@ -128,7 +174,8 @@ function extractFirstJsonArray(text) {
       if (depth === 0) return text.slice(start, i + 1);
     }
   }
-  throw new Error("추천 결과 JSON 배열이 완성되지 않았습니다.");
+
+  throw new Error("JSON 배열이 끝까지 완성되지 않았습니다.");
 }
 
 async function enrichProjectImage(item) {
