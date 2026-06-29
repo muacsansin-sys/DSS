@@ -36,7 +36,9 @@
 
       <div class="sidebar-actions">
         <button id="resetBtn" class="button ghost" type="button">초기화</button>
+        <button id="importBtn" class="button ghost" type="button">JSON 불러오기</button>
         <button id="exportBtn" class="button dark" type="button">JSON 저장</button>
+        <input id="importFile" class="visually-hidden" type="file" accept="application/json,.json">
       </div>
     </aside>
 
@@ -119,6 +121,7 @@
       </section>
     </div>
     <div class="dialog-actions">
+      <button id="printReportBtn" class="button ghost" type="button">PDF로 저장/인쇄</button>
       <button id="downloadReportBtn" class="button primary" type="button">보고서 다운로드</button>
     </div>
   </dialog>

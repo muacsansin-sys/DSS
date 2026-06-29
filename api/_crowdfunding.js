@@ -11,6 +11,23 @@ const CROWDFUNDING_DOMAINS = [
   "www.funding4u.co.kr"
 ];
 
+const IMAGE_HOST_ALLOWLIST = [
+  ...CROWDFUNDING_DOMAINS,
+  "cdn.wadiz.kr",
+  "static.wadiz.kr",
+  "tumblbug-assets.imgix.net",
+  "tumblbug-pci.imgix.net",
+  "tumblbug-upi.imgix.net",
+  "tumblbug.com",
+  "image.ohmycompany.com",
+  "cdn.ohmycompany.com",
+  "funding4u.co.kr"
+];
+
+const PRIVATE_HOSTS = new Set(["localhost", "127.0.0.1", "0.0.0.0", "::1"]);
+const DEFAULT_FETCH_TIMEOUT_MS = 10_000;
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+
 async function recommendCrowdfundingItems(interest, apiKey) {
   const prompt = buildRecommendationPrompt(interest);
   const data = await requestOpenAI(prompt, apiKey);
@@ -72,70 +89,83 @@ function buildRecommendationPrompt(interest) {
 }
 
 async function requestOpenAI(prompt, apiKey) {
-  const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${apiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      model: OPENAI_MODEL,
-      tools: [{
-        type: "web_search",
-        search_context_size: "low",
-        filters: {
-          allowed_domains: ["wadiz.kr", "tumblbug.com", "ohmycompany.com", "funding4u.co.kr"]
-        }
-      }],
-      tool_choice: "required",
-      input: [
-        {
-          role: "system",
-          content: "You are a careful startup education research assistant. Use web search results only. Never invent project names or URLs."
-        },
-        {
-          role: "user",
-          content: prompt
-        }
-      ],
-      text: {
-        format: {
-          type: "json_schema",
-          name: "crowdfunding_recommendations",
-          strict: true,
-          schema: {
-            type: "object",
-            additionalProperties: false,
-            required: ["items"],
-            properties: {
-              items: {
-                type: "array",
-                minItems: 10,
-                maxItems: 10,
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 55_000);
+  let response;
+  try {
+    response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: OPENAI_MODEL,
+        tools: [{
+          type: "web_search",
+          search_context_size: "low",
+          filters: {
+            allowed_domains: ["wadiz.kr", "tumblbug.com", "ohmycompany.com", "funding4u.co.kr"]
+          }
+        }],
+        tool_choice: "required",
+        input: [
+          {
+            role: "system",
+            content: "You are a careful startup education research assistant. Use web search results only. Never invent project names or URLs."
+          },
+          {
+            role: "user",
+            content: prompt
+          }
+        ],
+        text: {
+          format: {
+            type: "json_schema",
+            name: "crowdfunding_recommendations",
+            strict: true,
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              required: ["items"],
+              properties: {
                 items: {
-                  type: "object",
-                  additionalProperties: false,
-                  required: ["name", "platform", "category", "description", "url", "imageUrl", "searchKeyword", "reason"],
-                  properties: {
-                    name: { type: "string" },
-                    platform: { type: "string" },
-                    category: { type: "string" },
-                    description: { type: "string" },
-                    url: { type: "string" },
-                    imageUrl: { type: "string" },
-                    searchKeyword: { type: "string" },
-                    reason: { type: "string" }
+                  type: "array",
+                  minItems: 10,
+                  maxItems: 10,
+                  items: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["name", "platform", "category", "description", "url", "imageUrl", "searchKeyword", "reason"],
+                    properties: {
+                      name: { type: "string" },
+                      platform: { type: "string" },
+                      category: { type: "string" },
+                      description: { type: "string" },
+                      url: { type: "string" },
+                      imageUrl: { type: "string" },
+                      searchKeyword: { type: "string" },
+                      reason: { type: "string" }
+                    }
                   }
                 }
               }
             }
           }
-        }
-      },
-      temperature: 0.1,
-      max_output_tokens: 4096
-    })
-  });
+        },
+        temperature: 0.1,
+        max_output_tokens: 4096
+      })
+    });
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw new Error("OpenAI API 응답 시간이 길어 검색을 중단했습니다. 관심사를 더 구체적으로 줄여 다시 시도해 주세요.");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -231,13 +261,10 @@ function extractFirstJsonValue(text) {
 
 async function validateAndEnrichProject(item) {
   if (looksLikePlaceholderUrl(item.url)) return null;
+  if (!isCrowdfundingProject(item)) return null;
 
   try {
-    const response = await fetch(item.url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AI Data Startup Lab"
-      }
-    });
+    const response = await safeFetch(item.url);
     if (!response.ok) return null;
 
     const html = await response.text();
@@ -299,10 +326,88 @@ function isCrowdfundingProject(item) {
 function isAllowedImageUrl(imageUrl) {
   try {
     const url = new URL(imageUrl);
-    return url.protocol === "https:" || url.protocol === "http:";
+    if (url.protocol !== "https:" && url.protocol !== "http:") return false;
+    if (isPrivateHostname(url.hostname)) return false;
+    return isAllowedHostname(url.hostname, IMAGE_HOST_ALLOWLIST);
   } catch {
     return false;
   }
+}
+
+function assertAllowedImageUrl(imageUrl) {
+  if (!isAllowedImageUrl(imageUrl)) {
+    throw new Error("Invalid image URL");
+  }
+}
+
+async function fetchImageBuffer(imageUrl) {
+  assertAllowedImageUrl(imageUrl);
+  const response = await safeFetch(imageUrl);
+  if (!response.ok) {
+    const error = new Error("Image fetch failed");
+    error.status = response.status;
+    throw error;
+  }
+
+  const contentType = response.headers.get("content-type") || "application/octet-stream";
+  if (!contentType.toLowerCase().startsWith("image/")) {
+    const error = new Error("URL does not point to an image");
+    error.status = 415;
+    throw error;
+  }
+
+  const contentLength = Number(response.headers.get("content-length") || 0);
+  if (contentLength > MAX_IMAGE_BYTES) {
+    const error = new Error("Image is too large");
+    error.status = 413;
+    throw error;
+  }
+
+  const arrayBuffer = await response.arrayBuffer();
+  if (arrayBuffer.byteLength > MAX_IMAGE_BYTES) {
+    const error = new Error("Image is too large");
+    error.status = 413;
+    throw error;
+  }
+
+  return {
+    contentType,
+    buffer: Buffer.from(arrayBuffer)
+  };
+}
+
+async function safeFetch(url, options = {}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), options.timeoutMs || DEFAULT_FETCH_TIMEOUT_MS);
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AI Data Startup Lab",
+        ...(options.headers || {})
+      }
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function isAllowedHostname(hostname, domains) {
+  const normalized = hostname.toLowerCase().replace(/^m\./, "");
+  return domains.some((domain) => normalized === domain || normalized.endsWith(`.${domain}`));
+}
+
+function isPrivateHostname(hostname) {
+  const value = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (PRIVATE_HOSTS.has(value)) return true;
+  if (/^10\./.test(value)) return true;
+  if (/^127\./.test(value)) return true;
+  if (/^169\.254\./.test(value)) return true;
+  if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(value)) return true;
+  if (/^192\.168\./.test(value)) return true;
+  if (/^fc|^fd/i.test(value)) return true;
+  return false;
 }
 
 function resolveImageCandidate(candidate, baseUrl) {
@@ -335,6 +440,12 @@ function decodeHtml(value) {
 module.exports = {
   CROWDFUNDING_DOMAINS,
   OPENAI_MODEL,
+  assertAllowedImageUrl,
+  fetchImageBuffer,
   isAllowedImageUrl,
-  recommendCrowdfundingItems
+  recommendCrowdfundingItems,
+  _private: {
+    extractFirstJsonValue,
+    isPrivateHostname
+  }
 };

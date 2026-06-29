@@ -148,6 +148,7 @@ const state = {
   data: {},
   suggestions: [],
   recommendedItems: [],
+  manualSearchLinks: [],
   searchStatus: ""
 };
 
@@ -180,7 +181,7 @@ function loadState() {
   if (!saved) return;
   try {
     const parsed = JSON.parse(saved);
-    Object.assign(state, parsed);
+    applyImportedState(parsed);
   } catch {
     localStorage.removeItem(STORAGE_KEY);
   }
@@ -188,6 +189,24 @@ function loadState() {
 
 function saveState() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+}
+
+function applyImportedState(imported) {
+  if (!imported || typeof imported !== "object") {
+    throw new Error("프로젝트 JSON 형식이 올바르지 않습니다.");
+  }
+
+  const nextSession = Number(imported.currentSession || 1);
+  state.currentSession = sessions.some((session) => session.id === nextSession) ? nextSession : 1;
+  state.completed = Array.isArray(imported.completed)
+    ? imported.completed.map(Number).filter((id) => sessions.some((session) => session.id === id))
+    : [];
+  state.projectName = String(imported.projectName || "");
+  state.data = imported.data && typeof imported.data === "object" ? { ...imported.data } : {};
+  state.suggestions = Array.isArray(imported.suggestions) ? imported.suggestions : [];
+  state.recommendedItems = Array.isArray(imported.recommendedItems) ? imported.recommendedItems.map(normalizeRecommendation) : [];
+  state.manualSearchLinks = Array.isArray(imported.manualSearchLinks) ? imported.manualSearchLinks : [];
+  state.searchStatus = String(imported.searchStatus || "");
 }
 
 function currentSession() {
@@ -271,9 +290,20 @@ function renderItemRecommender() {
         <button class="button dark" type="button" data-search-recommendations>경쟁아이템 검색</button>
       </div>
       <div id="searchStatus" class="search-status">${escapeHtml(state.searchStatus || "검색할 관심사를 위 입력칸에 적어주세요.")}</div>
+      ${renderManualSearchLinks()}
       <div class="recommend-grid">${cardMarkup}</div>
       ${valueOf("itemName") ? renderGeneratedCardPreview() : ""}
     </section>
+  `;
+}
+
+function renderManualSearchLinks() {
+  const links = state.manualSearchLinks || [];
+  if (!links.length) return "";
+  return `
+    <div class="manual-search-links" aria-label="직접 검색 링크">
+      ${links.map((link) => `<a href="${escapeHtml(link.url)}" target="_blank" rel="noreferrer">${escapeHtml(link.label)}</a>`).join("")}
+    </div>
   `;
 }
 
@@ -302,6 +332,20 @@ function buildSearchUrl(name, platform = "") {
   return `https://www.google.com/search?q=${encodeURIComponent(`${name || ""} ${platform || ""} 와디즈 텀블벅 크라우드펀딩`)}`;
 }
 
+function buildManualSearchLinks(interest) {
+  const query = String(interest || "").trim();
+  if (!query) return [];
+  return [
+    ["와디즈", `site:wadiz.kr ${query}`],
+    ["텀블벅", `site:tumblbug.com ${query}`],
+    ["오마이컴퍼니", `site:ohmycompany.com ${query}`],
+    ["펀딩포유", `site:funding4u.co.kr ${query}`]
+  ].map(([label, keyword]) => ({
+    label: `${label}에서 직접 확인`,
+    url: `https://www.google.com/search?q=${encodeURIComponent(keyword)}`
+  }));
+}
+
 function normalizeRecommendation(item) {
   return {
     name: item.name || item.title || "",
@@ -324,6 +368,7 @@ async function searchRecommendations() {
 
   state.searchStatus = "크라우드펀딩 아이템을 검색하고 있습니다...";
   state.recommendedItems = [];
+  state.manualSearchLinks = [];
   saveState();
   renderSession();
 
@@ -339,8 +384,10 @@ async function searchRecommendations() {
     state.searchStatus = state.recommendedItems.length
       ? "후보를 찾았습니다. 상세페이지를 열어 확인한 뒤 하나를 선택하세요."
       : "후보를 찾지 못했습니다. 관심사를 더 구체적으로 입력해보세요.";
+    if (!state.recommendedItems.length) state.manualSearchLinks = buildManualSearchLinks(interest);
   } catch (error) {
-    state.searchStatus = `검색 실패: ${error.message}`;
+    state.searchStatus = `검색 실패: ${error.message} 아래 링크로 직접 후보를 확인할 수 있습니다.`;
+    state.manualSearchLinks = buildManualSearchLinks(interest);
   }
   saveState();
   renderSession();
@@ -377,6 +424,7 @@ function selectRecommendedItem(index) {
   state.data.beforeValue = card.description;
   state.data.selectedPlatform = card.platform;
   state.data.selectedImageUrl = card.imageUrl || "";
+  state.data.itemVerified = "";
   state.projectName = state.projectName || `${card.name} 고도화 프로젝트`;
   saveState();
   render();
@@ -405,8 +453,12 @@ function renderGeneratedCardPreview() {
           <strong>${escapeHtml(valueOf("itemName") || "")}</strong>
         </div>
         <small>${escapeHtml(valueOf("selectedItemLink") || "상세페이지 링크")}</small>
+        <div class="verification-status ${valueOf("itemVerified") ? "verified" : ""}">
+          ${valueOf("itemVerified") ? "상세페이지 확인 완료" : "상세페이지 확인 필요"}
+        </div>
       </div>
       <div class="field-actions">
+        <button class="button ghost" type="button" data-verify-item>상세페이지 확인 완료</button>
         <button class="button primary" type="button" data-download-generated-card>카드 이미지 다운로드</button>
       </div>
     </section>
@@ -699,10 +751,40 @@ function runAssistantTool(tool) {
   renderSuggestions();
 }
 
-function polishField(fieldId) {
+async function polishField(fieldId) {
   const item = sessions.flatMap((session) => session.fields).find((fieldItem) => fieldItem.id === fieldId);
   const current = valueOf(fieldId).trim();
   const title = item ? item.label : "선택 항목";
+  state.suggestions = [{
+    title: `${title} 문장 보조`,
+    body: "작성 내용을 바탕으로 조언을 만들고 있습니다.",
+    items: ["잠시만 기다려 주세요."]
+  }].concat(buildDefaultSuggestions(currentSession()));
+  renderSuggestions();
+
+  try {
+    const response = await fetch("/api/assist", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        label: title,
+        value: current,
+        sessionTitle: currentSession().title
+      })
+    });
+    const advice = await response.json();
+    if (!response.ok) throw new Error(advice.error || "AI 조언 요청에 실패했습니다.");
+    state.suggestions = [{
+      title: advice.title || `${title} 문장 보조`,
+      body: advice.body || "아래 기준으로 문장을 다듬어 보세요.",
+      items: Array.isArray(advice.items) ? advice.items : []
+    }].concat(buildDefaultSuggestions(currentSession()));
+    renderSuggestions();
+    return;
+  } catch {
+    // API 키가 없거나 네트워크가 막힌 수업 환경에서도 기본 조언은 제공한다.
+  }
+
   state.suggestions = [{
     title: `${title} 문장 보조`,
     body: current ? "현재 문장을 더 구체화할 때 아래 기준을 적용해보세요." : "빈칸에 바로 쓸 수 있는 문장 틀입니다.",
@@ -730,6 +812,16 @@ function completeCurrentSession() {
       title: "완료 전 확인",
       body: "아래 필수 항목을 채우면 차시 완료 처리가 가능합니다.",
       items: missing.map((item) => item.label)
+    }].concat(buildDefaultSuggestions(session));
+    renderSuggestions();
+    return;
+  }
+
+  if (session.id === 1 && valueOf("itemName") && !valueOf("itemVerified")) {
+    state.suggestions = [{
+      title: "상세페이지 확인 필요",
+      body: "AI 추천 후보는 참고 자료입니다. 상세페이지를 직접 열어 제품이 실제로 분석 대상에 맞는지 확인한 뒤 완료 처리하세요.",
+      items: ["상세페이지 열기", "제품명과 설명 확인", "상세페이지 확인 완료 버튼 클릭"]
     }].concat(buildDefaultSuggestions(session));
     renderSuggestions();
     return;
@@ -838,6 +930,24 @@ function exportJson() {
   URL.revokeObjectURL(url);
 }
 
+function importJsonFile(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const parsed = JSON.parse(String(reader.result || ""));
+      applyImportedState(parsed);
+      saveState();
+      render();
+      alert("프로젝트 JSON을 불러왔습니다.");
+    } catch (error) {
+      alert(error.message || "프로젝트 JSON을 불러오지 못했습니다.");
+    }
+  };
+  reader.onerror = () => alert("파일을 읽지 못했습니다.");
+  reader.readAsText(file, "utf-8");
+}
+
 function buildReportText() {
   const lines = [];
   lines.push(`사업계획서 요약`);
@@ -848,6 +958,9 @@ function buildReportText() {
     session.fields.forEach((item) => {
       lines.push(`- ${item.label}: ${valueOf(item.id) || "미작성"}`);
     });
+    if (session.id === 1) {
+      lines.push(`- 상세페이지 확인 상태: ${valueOf("itemVerified") ? "확인 완료" : "미확인"}`);
+    }
     lines.push("");
   });
   return lines.join("\n");
@@ -914,6 +1027,11 @@ document.addEventListener("click", (event) => {
     downloadGeneratedCard();
   }
 
+  if (event.target.closest("[data-verify-item]")) {
+    setValue("itemVerified", new Date().toISOString());
+    renderSession();
+  }
+
   const fieldId = event.target.closest("[data-polish]")?.dataset.polish;
   if (fieldId) polishField(fieldId);
 
@@ -936,7 +1054,13 @@ document.getElementById("closePreviewBtn").addEventListener("click", () => {
   }
 });
 document.getElementById("downloadReportBtn").addEventListener("click", downloadReport);
+document.getElementById("printReportBtn").addEventListener("click", () => window.print());
 document.getElementById("exportBtn").addEventListener("click", exportJson);
+document.getElementById("importBtn").addEventListener("click", () => document.getElementById("importFile").click());
+document.getElementById("importFile").addEventListener("change", (event) => {
+  importJsonFile(event.target.files?.[0]);
+  event.target.value = "";
+});
 document.getElementById("resetBtn").addEventListener("click", resetAll);
 
 loadState();

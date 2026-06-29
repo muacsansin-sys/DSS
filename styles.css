@@ -196,8 +196,25 @@ button {
 
 .sidebar-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 16px;
+}
+
+.sidebar-actions .button {
+  flex: 1 1 120px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .workspace {
@@ -542,6 +559,24 @@ button {
   word-break: break-all;
 }
 
+.verification-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  width: fit-content;
+  padding: 0 10px;
+  border-radius: 8px;
+  background: #fff1d7;
+  color: #8a4b00;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.verification-status.verified {
+  background: #dff5e9;
+  color: #146c43;
+}
+
 .field-card {
   display: grid;
   gap: 8px;
@@ -594,6 +629,26 @@ button {
   font-weight: 800;
   padding: 0 10px;
   white-space: nowrap;
+}
+
+.manual-search-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.manual-search-links a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--primary);
+  font-weight: 800;
+  text-decoration: none;
 }
 
 .assistant-panel {
@@ -793,5 +848,45 @@ button {
   .header-actions .button,
   .sidebar-actions .button {
     flex: 1;
+  }
+}
+
+@media print {
+  body {
+    background: #fff;
+  }
+
+  .app-shell,
+  .dialog-header button,
+  .dialog-actions {
+    display: none !important;
+  }
+
+  .preview-dialog {
+    position: static;
+    display: block;
+    width: auto;
+    max-width: none;
+    max-height: none;
+    border: 0;
+    box-shadow: none;
+  }
+
+  .dialog-header,
+  .preview-layout {
+    display: block;
+    padding: 0;
+    background: #fff;
+  }
+
+  .one-page-summary,
+  .slide-deck {
+    break-inside: avoid;
+  }
+
+  .preview-card,
+  .slide-card {
+    break-inside: avoid;
+    margin-bottom: 10px;
   }
 }

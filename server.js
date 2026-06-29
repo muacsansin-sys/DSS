@@ -1,7 +1,8 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
-const { OPENAI_MODEL, isAllowedImageUrl, recommendCrowdfundingItems } = require("./api/_crowdfunding");
+const { generateFieldAdvice } = require("./api/_assistant");
+const { OPENAI_MODEL, fetchImageBuffer, isAllowedImageUrl, recommendCrowdfundingItems } = require("./api/_crowdfunding");
 
 const PORT = Number(process.env.PORT || 5173);
 const ROOT = __dirname;
@@ -44,6 +45,21 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { items });
     }
 
+    if (req.method === "POST" && url.pathname === "/api/assist") {
+      const body = await readJson(req);
+      if (!OPENAI_API_KEY) {
+        return sendJson(res, 500, {
+          error: "서버에 OPENAI_API_KEY가 설정되어 있지 않습니다. run_app.ps1에서 키를 설정한 뒤 다시 실행하세요."
+        });
+      }
+      const advice = await generateFieldAdvice({
+        label: String(body.label || ""),
+        value: String(body.value || ""),
+        sessionTitle: String(body.sessionTitle || "")
+      }, OPENAI_API_KEY);
+      return sendJson(res, 200, advice);
+    }
+
     if (req.method === "GET" && url.pathname === "/api/image") {
       const imageUrl = url.searchParams.get("url") || "";
       return proxyImage(imageUrl, res);
@@ -70,26 +86,15 @@ async function proxyImage(imageUrl, res) {
   }
 
   try {
-    const response = await fetch(imageUrl, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AI Data Startup Lab"
-      }
-    });
-    if (!response.ok) {
-      res.writeHead(response.status);
-      return res.end("Image fetch failed");
-    }
-
-    const contentType = response.headers.get("content-type") || "image/jpeg";
-    const arrayBuffer = await response.arrayBuffer();
+    const { contentType, buffer } = await fetchImageBuffer(imageUrl);
     res.writeHead(200, {
       "Content-Type": contentType,
       "Cache-Control": "public, max-age=3600",
       "Access-Control-Allow-Origin": "*"
     });
-    res.end(Buffer.from(arrayBuffer));
+    res.end(buffer);
   } catch (error) {
-    res.writeHead(500);
+    res.writeHead(error.status || 500);
     res.end(error.message || "Image proxy error");
   }
 }
